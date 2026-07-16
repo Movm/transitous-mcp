@@ -1,4 +1,5 @@
 import { RequestRateLimiter, TtlCache } from "./cache.js";
+import { actionForTool, getApiAction, type ApiAction } from "./actions.js";
 import { policyEnvelope } from "./policy.js";
 
 const DEFAULT_BASE_URL = "https://api.transitous.org";
@@ -40,6 +41,16 @@ export interface ConnectionSearchInput {
   transitModes?: TransitMode[];
   wheelchair?: boolean;
   requireBikeTransport?: boolean;
+}
+
+export type ApiQueryValue = string | number | boolean | Array<string | number | boolean>;
+
+export interface ExecuteApiActionInput {
+  actionId: string;
+  query?: Record<string, ApiQueryValue>;
+  body?: Record<string, unknown>;
+  acknowledgeHeavyRequest?: boolean;
+  maxResponseBytes?: number;
 }
 
 interface TransitousMatch {
@@ -126,7 +137,7 @@ function validateUserAgent(userAgent: string | undefined): string {
   if (!value || !hasVersion || !hasContact) {
     throw new Error(
       "TRANSITOUS_USER_AGENT must include an application name, version, and contact, for example: " +
-        "transitous-mcp/0.1.0 (https://github.com/user/transitous-mcp; mailto:you@example.com)",
+        "transitous-mcp/0.2.0 (https://github.com/user/transitous-mcp; mailto:you@example.com)",
     );
   }
   return value;
@@ -212,6 +223,7 @@ export class TransitousClient {
   private readonly locationsCache = new TtlCache<unknown>(15 * 60_000);
   private readonly stopMatchCache = new TtlCache<TransitousMatch[]>(15 * 60_000);
   private readonly connectionsCache = new TtlCache<unknown>(60_000);
+  private readonly actionsCache = new TtlCache<unknown>(60_000);
   private readonly limiter: RequestRateLimiter;
 
   constructor(options: {
@@ -312,6 +324,63 @@ export class TransitousClient {
     return result;
   }
 
+  async executeApiAction(input: ExecuteApiActionInput, signal?: AbortSignal): Promise<unknown> {
+    const action = getApiAction(input.actionId);
+    if (!action) {
+      throw new Error(`Unknown Transitous action: ${input.actionId}. Use search_api_actions to find an action ID.`);
+    }
+    if (action.resourceIntensive && !input.acknowledgeHeavyRequest) {
+      throw new Error(
+        `Action ${action.id} can be resource-intensive. Read ${"https://transitous.org/api/"} and retry with ` +
+          "acknowledgeHeavyRequest=true only when the request complies with the Transitous usage policy.",
+      );
+    }
+
+    const query = input.query ?? {};
+    this.validateQuery(action, query);
+    const body = input.body;
+    this.validateBody(action, body);
+
+    const params = new URLSearchParams();
+    for (const [name, value] of Object.entries(query)) {
+      params.set(name, Array.isArray(value) ? value.map(String).join(",") : String(value));
+    }
+    const path = params.size > 0 ? `${action.path}?${params.toString()}` : action.path;
+    const maxResponseBytes = input.maxResponseBytes ?? 250_000;
+    const cacheKey = JSON.stringify({ actionId: action.id, query, body, maxResponseBytes });
+    const cached = this.actionsCache.get(cacheKey);
+    if (cached) return { ...cached as object, cache: "hit" };
+
+    const init: RequestInit = { method: action.method };
+    if (action.method === "POST") {
+      init.headers = { "Content-Type": "application/json" };
+      init.body = JSON.stringify(body);
+    }
+    const data = await this.request<unknown>(path, signal, init);
+    const serialized = JSON.stringify(data);
+    const responseBytes = Buffer.byteLength(serialized ?? "", "utf8");
+    const truncated = responseBytes > maxResponseBytes;
+    const responseData = truncated
+      ? {
+          dataPreview: Buffer.from(serialized ?? "", "utf8").subarray(0, maxResponseBytes).toString("utf8"),
+          responseTruncated: true,
+          responseBytes,
+          maxResponseBytes,
+          truncationNotice:
+            "The upstream response exceeded the MCP safety limit. Narrow the API query or increase maxResponseBytes up to 1000000.",
+        }
+      : { data, responseTruncated: false, responseBytes };
+    const result = {
+      action: actionForTool(action),
+      request: { method: action.method, path: action.path, query },
+      ...responseData,
+      cache: "miss",
+      ...policyEnvelope(),
+    };
+    this.actionsCache.set(cacheKey, result);
+    return result;
+  }
+
   private async resolveStop(query: string, language: string, signal?: AbortSignal): Promise<TransitousMatch[]> {
     const params = new URLSearchParams({ text: query, type: "STOP", language, numResults: "5" });
     const key = params.toString();
@@ -322,16 +391,52 @@ export class TransitousClient {
     return matches;
   }
 
-  private async request<T>(path: string, signal?: AbortSignal): Promise<T> {
+  private validateQuery(action: ApiAction, query: Record<string, ApiQueryValue>): void {
+    const unknown = Object.keys(query).filter((name) => !action.queryParameters.includes(name));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unsupported query parameter(s) for ${action.id}: ${unknown.join(", ")}. ` +
+          `Accepted: ${action.queryParameters.join(", ") || "none"}.`,
+      );
+    }
+    const missing = action.requiredQueryParameters.filter((name) => query[name] === undefined || query[name] === "");
+    if (missing.length > 0) {
+      throw new Error(`Missing required query parameter(s) for ${action.id}: ${missing.join(", ")}.`);
+    }
+  }
+
+  private validateBody(action: ApiAction, body: Record<string, unknown> | undefined): void {
+    if (action.method === "GET" && body !== undefined) {
+      throw new Error(`Action ${action.id} uses GET and does not accept a JSON body.`);
+    }
+    if (action.method === "POST" && body === undefined) {
+      throw new Error(`Action ${action.id} requires a JSON body.`);
+    }
+    if (!body) return;
+    const accepted = action.bodyProperties ?? [];
+    const unknown = Object.keys(body).filter((name) => !accepted.includes(name));
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unsupported body properties for ${action.id}: ${unknown.join(", ")}. Accepted: ${accepted.join(", ")}.`,
+      );
+    }
+    const missing = (action.requiredBodyProperties ?? []).filter((name) => body[name] === undefined);
+    if (missing.length > 0) {
+      throw new Error(`Missing required body properties for ${action.id}: ${missing.join(", ")}.`);
+    }
+  }
+
+  private async request<T>(path: string, signal?: AbortSignal, init: RequestInit = {}): Promise<T> {
     const userAgent = validateUserAgent(this.userAgent);
     this.limiter.take();
     const timeout = AbortSignal.timeout(20_000);
     const combinedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    const headers = new Headers(init.headers);
+    headers.set("Accept", "application/json");
+    headers.set("User-Agent", userAgent);
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": userAgent,
-      },
+      ...init,
+      headers,
       signal: combinedSignal,
     });
     const text = await response.text();

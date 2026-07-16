@@ -1,7 +1,6 @@
 # Transitous MCP Server
 
-A small, self-hostable Model Context Protocol server for public-transport stop
-search and real A-to-B journey planning through the
+A self-hostable Model Context Protocol server covering the complete public
 [Transitous](https://transitous.org/) MOTIS API. It works over Streamable HTTP
 for ChatGPT, Claude, Grünerator, and other MCP clients, or locally over stdio.
 
@@ -28,9 +27,10 @@ and non-profit use. You must:
   [OpenStreetMap attribution](https://www.openstreetmap.org/copyright).
 
 This server enforces a descriptive User-Agent, caches stop searches for 15
-minutes and connections for 60 seconds, and limits uncached upstream calls to 20
-per minute by default. These protections do not grant permission beyond the
-Transitous policy or the individual data-source licences.
+minutes and routing/generic API responses for 60 seconds, and limits uncached
+upstream calls to 20 per minute by default. Resource-intensive actions require
+an explicit policy acknowledgement. These protections do not grant permission
+beyond the Transitous policy or the individual data-source licences.
 
 Transitous and its feeds may be incomplete, delayed, or incorrect. Do not rely
 on results as the sole source for critical travel decisions; verify important
@@ -41,8 +41,55 @@ journeys with the relevant operator.
 - `search_locations` — resolve station/stop names to Transitous stop IDs.
 - `search_connections` — find A-to-B journeys with legs, transfers, available
   realtime status, delays, tracks, wheelchair routing, and bicycle requirements.
+- `search_api_actions` — search or list the complete allowlisted API catalog and
+  its accepted query/body fields.
+- `execute_api_action` — execute any operation from that catalog, including
+  computational POST endpoints. Arbitrary URLs are not accepted.
 
-Both tools are read-only. Fares, reservations, and ticket sales are not included.
+All tools are read-only from the user's perspective. The upstream POST endpoints
+perform routing computations; they do not create or mutate Transitous data.
+Reservations and ticket sales are not part of the upstream API. The generic
+`plan` action can request experimental fare data with `withFares=true` when the
+underlying feeds provide it.
+
+### Complete API coverage
+
+The catalog covers all 21 GET/POST operations in the pinned MOTIS 2.10.2 OpenAPI
+surface used by this release:
+
+| Area | Actions |
+| --- | --- |
+| Journey routing | `plan`, `refresh_itinerary_get`, `refresh_itinerary_post` |
+| Reachability | `one_to_many_get`, `one_to_many_post`, `one_to_many_intermodal_get`, `one_to_many_intermodal_post`, `one_to_all` |
+| Places | `geocode`, `reverse_geocode` |
+| Timetable | `trip`, `stoptimes` |
+| Map | `map_initial`, `map_trips`, `map_stops`, `map_levels`, `map_routes_experimental`, `map_route_details_experimental` |
+| Rentals | `rentals` |
+| Operations/debug | `health`, `debug_transfers` |
+
+The exact accepted parameters are returned by `search_api_actions` and validated
+before any upstream request. Parameter semantics follow the
+[MOTIS OpenAPI document](https://github.com/motis-project/motis/blob/v2.10.2/openapi.yaml).
+Experimental endpoints are clearly marked and may change upstream.
+
+Large map and routing responses are limited to 250 kB by default and report when
+they were truncated. `maxResponseBytes` can be raised to 1 MB, but narrowing the
+geographic/time query is preferred. Actions marked `resourceIntensive` only run
+with `acknowledgeHeavyRequest=true` after reviewing the Transitous policy.
+
+Example generic action input for departures:
+
+```json
+{
+  "actionId": "stoptimes",
+  "query": {
+    "stopId": "STOP_ID_FROM_SEARCH_LOCATIONS",
+    "n": 10,
+    "language": ["de"],
+    "withAlerts": true
+  }
+}
+```
 
 ## Run locally
 
