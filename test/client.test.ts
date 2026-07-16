@@ -20,7 +20,7 @@ describe("TransitousClient", () => {
 
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0][0]).toContain("/api/v1/geocode?text=Berlin+Hbf&type=STOP");
-    expect(fetchImpl.mock.calls[0][1]?.headers).toMatchObject({ "User-Agent": USER_AGENT });
+    expect(new Headers(fetchImpl.mock.calls[0][1]?.headers).get("User-Agent")).toBe(USER_AGENT);
     expect(first).toMatchObject({ count: 1, cache: "miss", attribution: { service: "Transitous" } });
     expect(second).toMatchObject({ count: 1, cache: "hit" });
   });
@@ -66,5 +66,78 @@ describe("TransitousClient", () => {
     const error = await client.searchLocations({ query: "Berlin" }).catch((caught) => caught);
     expect(error).toBeInstanceOf(TransitousApiError);
     expect(error).toMatchObject({ status: 503, responseBody: { error: "busy" } });
+  });
+
+  it("executes an allowlisted GET action with encoded query parameters", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([{ id: "stop-1" }]));
+    const client = new TransitousClient({ baseUrl: "https://example.test", fetchImpl, userAgent: USER_AGENT });
+
+    const result = await client.executeApiAction({
+      actionId: "geocode",
+      query: { text: "Berlin Hbf", type: ["STOP", "ADDRESS"], numResults: 3 },
+    }) as any;
+
+    expect(fetchImpl.mock.calls[0][0]).toBe(
+      "https://example.test/api/v1/geocode?text=Berlin+Hbf&type=STOP%2CADDRESS&numResults=3",
+    );
+    expect(fetchImpl.mock.calls[0][1]?.method).toBe("GET");
+    expect(result).toMatchObject({
+      action: { actionId: "geocode", method: "GET" },
+      responseTruncated: false,
+      data: [{ id: "stop-1" }],
+      attribution: { service: "Transitous" },
+    });
+  });
+
+  it("executes a computational POST action with its documented JSON body", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse([{ duration: 120 }]));
+    const client = new TransitousClient({ baseUrl: "https://example.test", fetchImpl, userAgent: USER_AGENT });
+    const body = {
+      one: "52.5;13.4",
+      many: ["52.6;13.5"],
+      mode: "WALK",
+      max: 1800,
+      maxMatchingDistance: 25,
+      arriveBy: false,
+    };
+
+    await client.executeApiAction({
+      actionId: "one_to_many_post",
+      body,
+      acknowledgeHeavyRequest: true,
+    });
+
+    expect(fetchImpl.mock.calls[0][0]).toBe("https://example.test/api/v1/one-to-many");
+    expect(fetchImpl.mock.calls[0][1]?.method).toBe("POST");
+    expect(fetchImpl.mock.calls[0][1]?.body).toBe(JSON.stringify(body));
+    expect(new Headers(fetchImpl.mock.calls[0][1]?.headers).get("Content-Type")).toBe("application/json");
+  });
+
+  it("requires an explicit policy acknowledgement for resource-intensive actions", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const client = new TransitousClient({ fetchImpl, userAgent: USER_AGENT });
+    await expect(
+      client.executeApiAction({ actionId: "plan", query: { fromPlace: "a", toPlace: "b" } }),
+    ).rejects.toThrow("acknowledgeHeavyRequest=true");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects undocumented parameters before contacting Transitous", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const client = new TransitousClient({ fetchImpl, userAgent: USER_AGENT });
+    await expect(
+      client.executeApiAction({ actionId: "health", query: { unexpected: true } }),
+    ).rejects.toThrow("Unsupported query parameter");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("truncates oversized generic responses without returning an oversized MCP payload", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ value: "x".repeat(2_000) }));
+    const client = new TransitousClient({ fetchImpl, userAgent: USER_AGENT });
+    const result = await client.executeApiAction({ actionId: "health", maxResponseBytes: 1_000 }) as any;
+    expect(result).toMatchObject({ responseTruncated: true, maxResponseBytes: 1_000 });
+    expect(result.data).toBeUndefined();
+    expect(result.dataPreview.length).toBeLessThanOrEqual(1_000);
+    expect(result.responseBytes).toBeGreaterThan(1_000);
   });
 });

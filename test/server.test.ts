@@ -24,7 +24,12 @@ describe("Transitous MCP server", () => {
     await client.connect(clientTransport);
 
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(["search_locations", "search_connections"]);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "search_locations",
+      "search_connections",
+      "search_api_actions",
+      "execute_api_action",
+    ]);
     expect(tools.every((tool) => Boolean(tool.title))).toBe(true);
     expect(tools.every((tool) => tool.description?.includes("Usage warning"))).toBe(true);
     expect(tools.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
@@ -49,5 +54,25 @@ describe("Transitous MCP server", () => {
     const result = await client.callTool({ name: "search_locations", arguments: { query: "Berlin" } });
     expect(result.isError).not.toBe(true);
     expect(JSON.stringify(result.content)).toContain("https://transitous.org/api/");
+  });
+
+  it("discovers the full API catalog through MCP", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    openServers.push(server);
+    openClients.push(client);
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: "search_api_actions",
+      arguments: { query: "Abfahrten Haltestelle", limit: 5 },
+    });
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const value = JSON.parse(text);
+    expect(value.totalAvailableActions).toBe(21);
+    expect(value.actions.map((action: { actionId: string }) => action.actionId)).toContain("stoptimes");
+    expect(value.attribution.usagePolicyUrl).toBe("https://transitous.org/api/");
   });
 });
