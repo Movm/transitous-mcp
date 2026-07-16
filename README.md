@@ -1,5 +1,9 @@
 # Transitous MCP Server
 
+[![CI](https://github.com/Movm/transitous-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Movm/transitous-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
+
 A self-hostable Model Context Protocol server covering the complete public
 [Transitous](https://transitous.org/) MOTIS API. It works over Streamable HTTP
 for ChatGPT, Claude, Grünerator, and other MCP clients, or locally over stdio.
@@ -171,6 +175,11 @@ pnpm check
 pnpm test
 pnpm build
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, test
+expectations, and pull-request checklist. Security issues belong in a private
+[GitHub security advisory](https://github.com/Movm/transitous-mcp/security/advisories/new),
+not a public issue.
 
 ## License
 

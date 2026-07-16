@@ -1,5 +1,11 @@
 # Security
 
+## Reporting a vulnerability
+
+Please use a private
+[GitHub security advisory](https://github.com/Movm/transitous-mcp/security/advisories/new).
+Do not include secrets, tokens, or exploitable details in a public issue.
+
 For an internet-facing deployment, set a long random `MCP_API_KEY` and use HTTPS.
 The server accepts the key as `Authorization: Bearer <key>` or `X-API-Key`.
 

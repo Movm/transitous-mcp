@@ -31,6 +31,14 @@
   "engines": {
     "node": ">=20"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Movm/transitous-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Movm/transitous-mcp/issues"
+  },
+  "homepage": "https://github.com/Movm/transitous-mcp#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "express": "^5.2.1",

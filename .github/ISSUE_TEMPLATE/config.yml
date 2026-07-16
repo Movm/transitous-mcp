@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Movm/transitous-mcp/security/advisories/new
+    about: Report security issues privately
+  - name: Transitous service and data issues
+    url: https://transitous.org/api/
+    about: Read the upstream usage policy and contact information
