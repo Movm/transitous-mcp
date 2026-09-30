@@ -1,3 +1,5 @@
+# Node 22 is the validated production LTS. Upgrade this major only after a
+# successful image build and deployment smoke test.
 FROM node:22-alpine AS build
 WORKDIR /app
 RUN corepack enable
