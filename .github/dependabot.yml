@@ -34,7 +34,6 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
-
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
@@ -45,6 +44,12 @@ updates:
     open-pull-requests-limit: 3
     cooldown:
       default-days: 3
+    ignore:
+      # Keep production on the validated Node.js 22 LTS line. Runtime-major
+      # upgrades require an explicit image build and deployment smoke test.
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
     groups:
       security-updates:
         applies-to: "security-updates"
